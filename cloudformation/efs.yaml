@@ -1,0 +1,378 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: 
+  'Hands-on Environment template'
+
+Parameters:
+## Infra
+  VpcCIDR: 
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.192.0.0/16
+
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.1.0/24
+
+  PublicSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the second Availability Zone
+    Type: String
+    Default: 10.192.2.0/24
+
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.129.0/24
+
+  PrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 10.192.130.0/24
+
+##Jenkins
+  AmiId:
+    Description: AMI Id
+    Type: AWS::EC2::Image::Id
+
+  MountPoint:
+    Description: Mount point for jenkins home
+    Type: String
+    Default: /var/lib/jenkins
+
+  InstanceType:
+    Description: Instance Type for jenkins instance
+    Type: String
+    Default: t3.micro
+  
+Resources:
+## Infra
+  VPC: 
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsHostnames : true
+      Tags:
+        - Key: Name
+          Value: demo-infra-VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: demo-infra-InternetGateway
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1: 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: demo-infra-PublicSubnet1
+
+  PublicSubnet2: 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: demo-infra-PublicSubnet2
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      Tags:
+        - Key: Name
+          Value: demo-infra-PrivateSubnet1
+
+  PrivateSubnet2: 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      Tags:
+        - Key: Name
+          Value: demo-infra-PrivateSubnet2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: demo-infra-PublicRouteTable
+
+  DefaultPublicRoute: 
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties: 
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+  
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: demo-infra-PrivateRouteTable
+
+  ## EFS
+  MountTargetSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Ref: VPC
+      GroupDescription: Security group for mount target
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 2049
+        ToPort: 2049
+        CidrIp: 0.0.0.0/0
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      PerformanceMode: generalPurpose
+      FileSystemTags:
+      - Key: Name
+        Value: jenkins-home-volume
+  MountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId:
+        Ref: FileSystem
+      SubnetId:
+        Ref: PrivateSubnet1
+      SecurityGroups:
+      - Ref: MountTargetSecurityGroup
+  MountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId:
+        Ref: FileSystem
+      SubnetId:
+        Ref: PrivateSubnet2
+      SecurityGroups:
+      - Ref: MountTargetSecurityGroup
+  
+  ## Jenkins
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Jenkins security group
+      VpcId:
+        Ref: VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+  JenkinsInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+        - !Ref CloudWatchPutMetricsPolicy
+      Path: "/"
+
+  CloudWatchPutMetricsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: CloudWatch_PutMetricData
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: CloudWatchPutMetricData
+          Effect: Allow
+          Action:
+          - cloudwatch:PutMetricData
+          Resource:
+          - "*"
+  
+  JenkinsInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref JenkinsInstanceRole
+  LaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          MountConfig:
+          - setup
+          - mount
+        setup:
+          packages:
+            yum:
+              nfs-utils: []
+          files:
+            "/home/ec2-user/post_nfsstat":
+              content: !Sub |
+                #!/bin/bash
+
+                INPUT="$(cat)"
+                CW_JSON_OPEN='{ "Namespace": "EFS", "MetricData": [ '
+                CW_JSON_CLOSE=' ] }'
+                CW_JSON_METRIC=''
+                METRIC_COUNTER=0
+
+                for COL in 1 2 3 4 5 6; do
+
+                 COUNTER=0
+                 METRIC_FIELD=$COL
+                 DATA_FIELD=$(($COL+($COL-1)))
+
+                 while read line; do
+                   if [[ COUNTER -gt 0 ]]; then
+
+                     LINE=`echo $line | tr -s ' ' `
+                     AWS_COMMAND="aws cloudwatch put-metric-data --region ${AWS::Region}"
+                     MOD=$(( $COUNTER % 2))
+
+                     if [ $MOD -eq 1 ]; then
+                       METRIC_NAME=`echo $LINE | cut -d ' ' -f $METRIC_FIELD`
+                     else
+                       METRIC_VALUE=`echo $LINE | cut -d ' ' -f $DATA_FIELD`
+                     fi
+
+                     if [[ -n "$METRIC_NAME" && -n "$METRIC_VALUE" ]]; then
+                       INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+                       CW_JSON_METRIC="$CW_JSON_METRIC { \"MetricName\": \"$METRIC_NAME\", \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"$INSTANCE_ID\"} ], \"Value\": $METRIC_VALUE },"
+                       unset METRIC_NAME
+                       unset METRIC_VALUE
+
+                       METRIC_COUNTER=$((METRIC_COUNTER+1))
+                       if [ $METRIC_COUNTER -eq 20 ]; then
+                         # 20 is max metric collection size, so we have to submit here
+                         aws cloudwatch put-metric-data --region ${AWS::Region} --cli-input-json "`echo $CW_JSON_OPEN ${!CW_JSON_METRIC%?} $CW_JSON_CLOSE`"
+
+                         # reset
+                         METRIC_COUNTER=0
+                         CW_JSON_METRIC=''
+                       fi
+                     fi
+
+
+
+                     COUNTER=$((COUNTER+1))
+                   fi
+
+                   if [[ "$line" == "Client nfs v4:" ]]; then
+                     # the next line is the good stuff
+                     COUNTER=$((COUNTER+1))
+                   fi
+                 done <<< "$INPUT"
+                done
+
+                # submit whatever is left
+                aws cloudwatch put-metric-data --region ${AWS::Region} --cli-input-json "`echo $CW_JSON_OPEN ${!CW_JSON_METRIC%?} $CW_JSON_CLOSE`"
+              mode: '000755'
+              owner: ec2-user
+              group: ec2-user
+            "/home/ec2-user/crontab":
+              content: "* * * * * /usr/sbin/nfsstat | /home/ec2-user/post_nfsstat\n"
+              owner: ec2-user
+              group: ec2-user
+          commands:
+            01_createdir:
+              command: !Sub "mkdir -p /${MountPoint}"
+        mount:
+          commands:
+            01_mount:
+              command: !Sub >
+                mount -t nfs4 -o nfsvers=4.1 ${FileSystem}.efs.${AWS::Region}.amazonaws.com:/ /${MountPoint}
+            02_permissions:
+              command: !Sub "chown jenkins:jenkins /${MountPoint}"
+    Properties:
+      AssociatePublicIpAddress: true
+      ImageId: !Ref AmiId
+      InstanceType:
+        !Ref InstanceType
+      SecurityGroups:
+        - Ref: InstanceSecurityGroup
+      IamInstanceProfile:
+        Ref: JenkinsInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          yum install -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfiguration --configsets MountConfig --region ${AWS::Region}
+          crontab /home/ec2-user/crontab
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+    - MountTarget1
+    - MountTarget2
+    - InternetGateway
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+        Count: '1'
+    Properties:
+      VPCZoneIdentifier:
+      - Ref: PublicSubnet1
+      - Ref: PublicSubnet2
+      LaunchConfigurationName:
+        Ref: LaunchConfiguration
+      MinSize: '1'
+      MaxSize: '2'
+      Tags:
+      - Key: Name
+        Value: EFS FileSystem Mounted Instance
+        PropagateAtLaunch: true
+Outputs:
+  MountTarget1ID:
+    Description: Mount target ID
+    Value:
+      Ref: MountTarget1
+
+  MountTarget2ID:
+    Description: Mount target ID
+    Value:
+      Ref: MountTarget2
+
+  FileSystemID:
+    Description: File system ID
+    Value:
+      Ref: FileSystem
